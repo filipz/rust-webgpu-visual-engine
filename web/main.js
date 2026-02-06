@@ -22,6 +22,8 @@ const PASSES = [
 ];
 
 const SHADER = /* wgsl */ `
+const TRAIL_SAMPLES : u32 = 8u;
+
 struct VertexOut {
   @builtin(position) position : vec4<f32>,
   @location(0) uv : vec2<f32>,
@@ -32,6 +34,7 @@ struct FxUniform {
   chroma_pixelate_blur_mix : vec4<f32>,
   mouse_current_prev : vec4<f32>,
   mouse_params : vec4<f32>,
+  trail : array<vec4<f32>, TRAIL_SAMPLES>,
 }
 
 @group(0) @binding(0) var source_tex : texture_2d<f32>;
@@ -67,14 +70,30 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let blur_amount = fx.chroma_pixelate_blur_mix.z;
   let mix_strength = fx.chroma_pixelate_blur_mix.w;
   let mouse_uv = fx.mouse_current_prev.xy;
-  let mouse_prev_uv = fx.mouse_current_prev.zw;
   let mouse_radius = max(0.02, fx.mouse_params.x);
   let mouse_strength = clamp(fx.mouse_params.y, 0.0, 1.0);
   let mouse_velocity = clamp(fx.mouse_params.z, 0.0, 1.0);
   let mouse_down = clamp(fx.mouse_params.w, 0.0, 1.0);
 
   let dist_to_mouse = distance(in.uv, mouse_uv);
-  let influence = exp(-pow(dist_to_mouse / mouse_radius, 2.0) * 2.8) * mouse_strength;
+  let base_mouse_influence = exp(-pow(dist_to_mouse / mouse_radius, 2.0) * 2.8) * mouse_strength;
+
+  var trail_influence = 0.0;
+  for (var i: u32 = 0u; i < TRAIL_SAMPLES; i = i + 1u) {
+    let tp = fx.trail[i];
+    let tpos = tp.xy;
+    let tradius = max(0.012, tp.z);
+    let tweight = tp.w;
+    let d = distance(in.uv, tpos);
+    let inf = exp(-pow(d / tradius, 2.0) * 3.0) * tweight;
+    trail_influence = max(trail_influence, inf);
+  }
+
+  let tip = fx.trail[0u];
+  let tip_dist = distance(in.uv, tip.xy);
+  let tip_influence = exp(-pow(tip_dist / max(0.01, tip.z * 0.72), 2.0) * 3.2) * tip.w;
+
+  let influence = clamp(max(base_mouse_influence, trail_influence) + tip_influence * 0.35, 0.0, 1.5);
   let local_displacement = displacement * (0.35 + influence * 1.65);
   let local_chroma = chroma * (0.35 + influence * 1.9);
   let local_pixelate = clamp(pixelate * (0.2 + influence * 2.0), 0.0, 1.0);
@@ -87,7 +106,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let wave_a = sin((snapped_uv.y + time * 0.34) * 29.0);
   let wave_b = cos((snapped_uv.x - time * 0.21) * 33.0);
   let wave_c = sin((snapped_uv.x + snapped_uv.y + time * 0.49) * 21.0);
-  let motion = mouse_uv - mouse_prev_uv;
+  let motion = fx.trail[0u].xy - fx.trail[1u].xy;
   let motion_len = length(motion);
   var motion_dir = vec2<f32>(0.0, 0.0);
   if (motion_len > 1e-5) {
@@ -134,6 +153,7 @@ const passLabel = document.querySelector(".pass-label");
 
 const sourceCanvas = document.createElement("canvas");
 const sourceCtx = sourceCanvas.getContext("2d");
+const TRAIL_SAMPLES = 8;
 
 let sourceTexture = null;
 let bindGroup = null;
@@ -145,7 +165,7 @@ let queue = null;
 let context = null;
 let lastPassLabel = "";
 
-const uniformFloats = new Float32Array(16);
+const uniformFloats = new Float32Array(16 + TRAIL_SAMPLES * 4);
 const uniformBytes = uniformFloats.byteLength;
 const pointer = {
   x: 0.5,
@@ -161,6 +181,12 @@ const pointer = {
   inside: false,
   down: false,
 };
+const trail = Array.from({ length: TRAIL_SAMPLES }, () => ({
+  x: 0.5,
+  y: 0.5,
+  radius: 0.13,
+  weight: 0.0,
+}));
 
 init().catch((error) => {
   console.error(error);
@@ -291,6 +317,13 @@ function frame(nowMs) {
   uniformFloats[13] = pointer.strength;
   uniformFloats[14] = pointer.velocity;
   uniformFloats[15] = pointer.down ? 1.0 : 0.0;
+  for (let i = 0; i < TRAIL_SAMPLES; i += 1) {
+    const base = 16 + i * 4;
+    uniformFloats[base] = trail[i].x;
+    uniformFloats[base + 1] = trail[i].y;
+    uniformFloats[base + 2] = trail[i].radius;
+    uniformFloats[base + 3] = trail[i].weight;
+  }
   queue.writeBuffer(uniformBuffer, 0, uniformFloats);
 
   const encoder = device.createCommandEncoder({ label: "frame-encoder" });
@@ -613,4 +646,28 @@ function updatePointerState() {
     ? 0.13 + pointer.velocity * 0.08 + (pointer.down ? 0.04 : 0.0)
     : 0.15;
   pointer.radius = mix(pointer.radius, targetRadius, 0.14);
+
+  updateTrail();
+}
+
+function updateTrail() {
+  for (let i = 0; i < TRAIL_SAMPLES; i += 1) {
+    const head = i === 0;
+    const leader = head ? pointer : trail[i - 1];
+    const follow = head ? 0.7 : 0.42;
+
+    trail[i].x = mix(trail[i].x, leader.x, follow);
+    trail[i].y = mix(trail[i].y, leader.y, follow);
+    trail[i].radius = mix(
+      trail[i].radius,
+      Math.max(0.02, pointer.radius * (1.0 - i * 0.06)),
+      0.34,
+    );
+
+    const decay = Math.exp(-i * 0.36);
+    const tipBoost = i === 0 ? 1.22 : 1.0;
+    const targetWeight = pointer.strength * decay * tipBoost;
+    const easing = pointer.inside ? (head ? 0.38 : 0.25) : 0.08;
+    trail[i].weight = mix(trail[i].weight, targetWeight, easing);
+  }
 }
