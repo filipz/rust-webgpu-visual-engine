@@ -28,14 +28,9 @@ struct VertexOut {
 }
 
 struct FxUniform {
-  resolution : vec2<f32>,
-  time : f32,
-  displacement : f32,
-  chroma : f32,
-  pixelate : f32,
-  blur_amount : f32,
-  mix_strength : f32,
-  _pad : f32,
+  resolution_time_displacement : vec4<f32>,
+  chroma_pixelate_blur_mix : vec4<f32>,
+  _pad : vec4<f32>,
 }
 
 @group(0) @binding(0) var source_tex : texture_2d<f32>;
@@ -63,35 +58,43 @@ fn sample_safe(uv: vec2<f32>) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
-  let px = vec2<f32>(1.0 / fx.resolution.x, 1.0 / fx.resolution.y);
-  let pixel_size = max(1.0, mix(1.0, 22.0, clamp(fx.pixelate, 0.0, 1.0)));
-  let snapped_uv = floor(in.uv * fx.resolution / pixel_size) * pixel_size / fx.resolution;
+  let resolution = fx.resolution_time_displacement.xy;
+  let time = fx.resolution_time_displacement.z;
+  let displacement = fx.resolution_time_displacement.w;
+  let chroma = fx.chroma_pixelate_blur_mix.x;
+  let pixelate = fx.chroma_pixelate_blur_mix.y;
+  let blur_amount = fx.chroma_pixelate_blur_mix.z;
+  let mix_strength = fx.chroma_pixelate_blur_mix.w;
 
-  let wave_a = sin((snapped_uv.y + fx.time * 0.34) * 29.0);
-  let wave_b = cos((snapped_uv.x - fx.time * 0.21) * 33.0);
-  let wave_c = sin((snapped_uv.x + snapped_uv.y + fx.time * 0.49) * 21.0);
-  let offset = vec2<f32>(wave_a + wave_b, wave_c) * (0.0032 * fx.displacement);
+  let px = vec2<f32>(1.0 / resolution.x, 1.0 / resolution.y);
+  let pixel_size = max(1.0, mix(1.0, 22.0, clamp(pixelate, 0.0, 1.0)));
+  let snapped_uv = floor(in.uv * resolution / pixel_size) * pixel_size / resolution;
+
+  let wave_a = sin((snapped_uv.y + time * 0.34) * 29.0);
+  let wave_b = cos((snapped_uv.x - time * 0.21) * 33.0);
+  let wave_c = sin((snapped_uv.x + snapped_uv.y + time * 0.49) * 21.0);
+  let offset = vec2<f32>(wave_a + wave_b, wave_c) * (0.0032 * displacement);
   let base_uv = snapped_uv + offset;
 
-  let chroma_shift = vec2<f32>(0.0055 * fx.chroma, 0.0);
+  let chroma_shift = vec2<f32>(0.0055 * chroma, 0.0);
   var color = vec3<f32>(
     sample_safe(base_uv + chroma_shift).r,
     sample_safe(base_uv).g,
     sample_safe(base_uv - chroma_shift).b
   );
 
-  let blur_px = px * (1.0 + fx.blur_amount * 9.0);
+  let blur_px = px * (1.0 + blur_amount * 9.0);
   let blurred =
     sample_safe(base_uv + vec2<f32>( blur_px.x, 0.0)) +
     sample_safe(base_uv - vec2<f32>( blur_px.x, 0.0)) +
     sample_safe(base_uv + vec2<f32>(0.0,  blur_px.y)) +
     sample_safe(base_uv - vec2<f32>(0.0,  blur_px.y)) +
     sample_safe(base_uv);
-  color = mix(color, blurred / 5.0, clamp(fx.blur_amount, 0.0, 1.0));
+  color = mix(color, blurred / 5.0, clamp(blur_amount, 0.0, 1.0));
 
-  let contrast = 1.06 + fx.displacement * 0.08;
+  let contrast = 1.06 + displacement * 0.08;
   let graded = (color - 0.5) * contrast + 0.5;
-  let final_color = mix(sample_safe(in.uv), graded, clamp(fx.mix_strength, 0.0, 1.0));
+  let final_color = mix(sample_safe(in.uv), graded, clamp(mix_strength, 0.0, 1.0));
 
   return vec4<f32>(final_color, 1.0);
 }
@@ -116,7 +119,7 @@ let queue = null;
 let context = null;
 let lastPassLabel = "";
 
-const uniformFloats = new Float32Array(8);
+const uniformFloats = new Float32Array(12);
 const uniformBytes = uniformFloats.byteLength;
 
 init().catch((error) => {
@@ -238,6 +241,10 @@ function frame(nowMs) {
   uniformFloats[5] = passSample.fx.pixelate;
   uniformFloats[6] = passSample.fx.blur;
   uniformFloats[7] = 1.0;
+  uniformFloats[8] = 0.0;
+  uniformFloats[9] = 0.0;
+  uniformFloats[10] = 0.0;
+  uniformFloats[11] = 0.0;
   queue.writeBuffer(uniformBuffer, 0, uniformFloats);
 
   const encoder = device.createCommandEncoder({ label: "frame-encoder" });
