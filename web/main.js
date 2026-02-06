@@ -26,10 +26,15 @@ const SETTINGS = {
   chromaGain: 1.0,
   blurGain: 1.0,
   pixelateGain: 1.0,
-  trailDecay: 0.16,
-  trailOpacity: 0.22,
-  trailRadius: 0.12,
-  trailStretch: 0.45,
+  trailDecay: 0.08,
+  trailFeedback: 0.86,
+  trailBlurPx: 2.2,
+  trailAdvection: 0.9,
+  trailOpacity: 0.34,
+  trailRadius: 0.08,
+  trailStretch: 0.6,
+  trailSpacing: 0.28,
+  tipBoost: 1.2,
   trailTextureMix: 1.0,
 };
 
@@ -95,9 +100,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                  textureSample(trail_tex, source_sampler, in.uv - vec2<f32>(0.0, px.y * 2.0)).r;
 
   let dist_to_mouse = distance(in.uv, mouse_uv);
-  let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.75), 2.0) * 3.3) * mouse_strength;
-  let trail_influence = clamp(trail_value * (0.35 + mouse_strength * 0.65), 0.0, 1.0);
-  let influence = clamp(max(tip_influence, trail_influence), 0.0, 1.4);
+  let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.55), 2.0) * 3.7) * mouse_strength;
+  let trail_influence = clamp(pow(trail_value, 0.9) * (0.5 + mouse_strength * 0.85), 0.0, 1.15);
+  let influence = clamp(trail_influence + tip_influence * 0.42, 0.0, 1.5);
 
   let local_displacement = displacement * (0.25 + influence * 1.9);
   let local_chroma = chroma * (0.18 + influence * 2.1);
@@ -118,13 +123,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     motion_dir = motion / motion_len;
   }
 
-  let radial = in.uv - mouse_uv;
-  let radial_len = max(length(radial), 1e-5);
-  let swirl = vec2<f32>(-radial.y, radial.x) / radial_len;
-
-  let trail_flow = vec2<f32>(trail_dx, trail_dy) * 0.024 * influence;
+  let trail_flow = vec2<f32>(trail_dx, trail_dy) * 0.032 * influence;
   let interactive_offset =
-    (motion_dir * (0.006 + mouse_velocity * 0.012) + swirl * 0.0045) * influence + trail_flow;
+    motion_dir * (0.004 + mouse_velocity * 0.012) * tip_influence + trail_flow;
 
   let offset = vec2<f32>(wave_a + wave_b, wave_c) * (0.0032 * local_displacement) + interactive_offset;
   let base_uv = snapped_uv + offset;
@@ -163,6 +164,8 @@ const sourceCanvas = document.createElement("canvas");
 const sourceCtx = sourceCanvas.getContext("2d");
 const trailCanvas = document.createElement("canvas");
 const trailCtx = trailCanvas.getContext("2d");
+const trailTempCanvas = document.createElement("canvas");
+const trailTempCtx = trailTempCanvas.getContext("2d");
 
 let sourceTexture = null;
 let trailTexture = null;
@@ -270,10 +273,15 @@ function resize() {
   sourceCanvas.height = height;
   trailCanvas.width = width;
   trailCanvas.height = height;
+  trailTempCanvas.width = width;
+  trailTempCanvas.height = height;
 
   trailCtx.setTransform(1, 0, 0, 1, 0, 0);
   trailCtx.fillStyle = "black";
   trailCtx.fillRect(0, 0, trailCanvas.width, trailCanvas.height);
+  trailTempCtx.setTransform(1, 0, 0, 1, 0, 0);
+  trailTempCtx.fillStyle = "black";
+  trailTempCtx.fillRect(0, 0, trailTempCanvas.width, trailTempCanvas.height);
 
   sourceTexture = device.createTexture({
     label: "source-dom-texture",
@@ -421,10 +429,25 @@ function drawSourceLayerToCanvas(ctx, targetCanvas, domRoot) {
 }
 
 function updateTrailField() {
+  const vx = (pointer.x - pointer.prevX) * trailCanvas.width;
+  const vy = (pointer.y - pointer.prevY) * trailCanvas.height;
+  const shiftX = vx * SETTINGS.trailAdvection;
+  const shiftY = vy * SETTINGS.trailAdvection;
+
+  trailTempCtx.setTransform(1, 0, 0, 1, 0, 0);
+  trailTempCtx.globalCompositeOperation = "source-over";
+  trailTempCtx.clearRect(0, 0, trailTempCanvas.width, trailTempCanvas.height);
+  trailTempCtx.globalAlpha = clamp01(SETTINGS.trailFeedback);
+  trailTempCtx.filter = `blur(${Math.max(0, SETTINGS.trailBlurPx)}px)`;
+  trailTempCtx.drawImage(trailCanvas, shiftX, shiftY);
+  trailTempCtx.filter = "none";
+  trailTempCtx.globalAlpha = 1.0;
+
   trailCtx.setTransform(1, 0, 0, 1, 0, 0);
   trailCtx.globalCompositeOperation = "source-over";
   trailCtx.fillStyle = `rgba(0, 0, 0, ${clamp01(SETTINGS.trailDecay)})`;
   trailCtx.fillRect(0, 0, trailCanvas.width, trailCanvas.height);
+  trailCtx.drawImage(trailTempCanvas, 0, 0);
 
   if (pointer.strength < 0.005 && !pointer.down) {
     return;
@@ -439,37 +462,34 @@ function updateTrailField() {
   const segment = Math.max(1, Math.hypot(dx, dy));
 
   const radiusPx = Math.max(
-    6,
+    5,
     trailCanvas.width * SETTINGS.trailRadius * (0.85 + pointer.velocity * SETTINGS.trailStretch),
   );
 
-  const steps = Math.max(1, Math.ceil(segment / Math.max(2, radiusPx * 0.28)));
+  const steps = Math.max(1, Math.ceil(segment / Math.max(1, radiusPx * SETTINGS.trailSpacing)));
   for (let i = 0; i <= steps; i += 1) {
     const t = steps === 0 ? 1 : i / steps;
     const x = x0 + dx * t;
     const y = y0 + dy * t;
 
-    const tipBias = Math.pow(t, 1.8);
-    const alpha = SETTINGS.trailOpacity * pointer.strength * (0.16 + 0.84 * tipBias);
-    const r = radiusPx * (0.8 + 0.25 * t);
-    stampTrail(x, y, r, alpha);
+    const tipBias = Math.pow(t, SETTINGS.tipBoost);
+    const alpha = SETTINGS.trailOpacity * pointer.strength * (0.12 + 0.88 * tipBias);
+    const r = radiusPx * (0.74 + 0.32 * tipBias);
+    stampTrailSquare(x, y, r, alpha);
   }
 
   if (pointer.down) {
-    stampTrail(x1, y1, radiusPx * 1.15, SETTINGS.trailOpacity * 0.5);
+    stampTrailSquare(x1, y1, radiusPx * 1.18, SETTINGS.trailOpacity * 0.62);
   }
 }
 
-function stampTrail(x, y, radius, alpha) {
+function stampTrailSquare(x, y, radius, alpha) {
+  const size = Math.max(2, radius * 2);
+  const x0 = x - size * 0.5;
+  const y0 = y - size * 0.5;
   trailCtx.globalCompositeOperation = "lighter";
-  const grad = trailCtx.createRadialGradient(x, y, 0, x, y, radius);
-  grad.addColorStop(0, `rgba(255,255,255,${Math.max(0, alpha)})`);
-  grad.addColorStop(0.5, `rgba(210,210,210,${Math.max(0, alpha * 0.42)})`);
-  grad.addColorStop(1.0, "rgba(0,0,0,0)");
-  trailCtx.fillStyle = grad;
-  trailCtx.beginPath();
-  trailCtx.arc(x, y, radius, 0, Math.PI * 2);
-  trailCtx.fill();
+  trailCtx.fillStyle = `rgba(255,255,255,${clamp01(alpha)})`;
+  trailCtx.fillRect(x0, y0, size, size);
   trailCtx.globalCompositeOperation = "source-over";
 }
 
@@ -737,9 +757,14 @@ async function setupControls() {
 
     const f2 = pane.addFolder({ title: "Trail" });
     f2.addBinding(SETTINGS, "trailDecay", { min: 0.01, max: 0.45, step: 0.005 });
+    f2.addBinding(SETTINGS, "trailFeedback", { min: 0.0, max: 0.98, step: 0.01 });
+    f2.addBinding(SETTINGS, "trailBlurPx", { min: 0.0, max: 8.0, step: 0.1 });
+    f2.addBinding(SETTINGS, "trailAdvection", { min: 0.0, max: 2.5, step: 0.01 });
     f2.addBinding(SETTINGS, "trailOpacity", { min: 0.01, max: 0.6, step: 0.005 });
     f2.addBinding(SETTINGS, "trailRadius", { min: 0.03, max: 0.3, step: 0.005 });
     f2.addBinding(SETTINGS, "trailStretch", { min: 0.0, max: 1.2, step: 0.01 });
+    f2.addBinding(SETTINGS, "trailSpacing", { min: 0.08, max: 0.9, step: 0.01 });
+    f2.addBinding(SETTINGS, "tipBoost", { min: 0.2, max: 3.0, step: 0.05 });
     f2.addBinding(SETTINGS, "trailTextureMix", { min: 0.0, max: 1.5, step: 0.01 });
   } catch (error) {
     console.warn("Tweakpane not loaded", error);
