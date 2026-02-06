@@ -27,16 +27,16 @@ const SETTINGS = {
   blurGain: 1.0,
   pixelateGain: 1.0,
   globalFx: false,
-  trailDecay: 0.09,
-  trailFeedback: 0.88,
-  trailBlurPx: 1.2,
+  trailDecay: 0.055,
+  trailFeedback: 0.93,
+  trailBlurPx: 1.8,
   trailAdvection: 0.45,
-  trailOpacity: 0.18,
-  trailRadius: 0.06,
+  trailOpacity: 0.3,
+  trailRadius: 0.11,
   trailStretch: 0.45,
   trailSpacing: 0.42,
   tipBoost: 2.2,
-  trailTextureMix: 0.6,
+  trailTextureMix: 1.0,
   trailGhost: 0.52,
   showDebugTrail: true,
   debugContrast: 2.4,
@@ -102,6 +102,16 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let mouse_down = clamp(fx.mouse_params.w, 0.0, 1.0);
 
   let px = vec2<f32>(1.0 / resolution.x, 1.0 / resolution.y);
+  let src_center = sample_safe(in.uv);
+  let lum_weights = vec3<f32>(0.299, 0.587, 0.114);
+  let src_luma = dot(src_center, lum_weights);
+  let src_l = dot(sample_safe(in.uv - vec2<f32>(px.x * 1.5, 0.0)), lum_weights);
+  let src_r = dot(sample_safe(in.uv + vec2<f32>(px.x * 1.5, 0.0)), lum_weights);
+  let src_t = dot(sample_safe(in.uv + vec2<f32>(0.0, px.y * 1.5)), lum_weights);
+  let src_b = dot(sample_safe(in.uv - vec2<f32>(0.0, px.y * 1.5)), lum_weights);
+  let edge_mask = clamp((abs(src_l - src_r) + abs(src_t - src_b)) * 2.8, 0.0, 1.0);
+  let content_mask = clamp((1.0 - src_luma) * 1.15 + edge_mask * 1.25, 0.0, 1.6);
+
   let trail_value = textureSample(trail_tex, source_sampler, in.uv).r;
   let trail_dx = textureSample(trail_tex, source_sampler, in.uv + vec2<f32>(px.x * 2.0, 0.0)).r -
                  textureSample(trail_tex, source_sampler, in.uv - vec2<f32>(px.x * 2.0, 0.0)).r;
@@ -112,11 +122,12 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.48), 2.0) * 3.8) * mouse_strength;
   let trail_influence = clamp(pow(trail_value, 0.7) * (0.68 + mouse_strength * 0.85), 0.0, 1.25);
   let influence = clamp(trail_influence + tip_influence * 0.22, 0.0, 1.45);
+  let local_influence = influence * (0.45 + content_mask * 1.1);
 
-  let local_displacement = displacement * influence * 2.2;
-  let local_chroma = chroma * influence * 2.25;
-  let local_pixelate = clamp(pixelate * influence * 2.2, 0.0, 1.0);
-  let local_blur = clamp((blur_amount * influence * 2.0) + mouse_down * influence * 0.08, 0.0, 1.0);
+  let local_displacement = displacement * local_influence * 2.35;
+  let local_chroma = chroma * local_influence * 2.35;
+  let local_pixelate = clamp(pixelate * local_influence * 2.2, 0.0, 1.0);
+  let local_blur = clamp((blur_amount * local_influence * 2.0) + mouse_down * local_influence * 0.08, 0.0, 1.0);
 
   let pixel_size = max(1.0, mix(1.0, 22.0, local_pixelate));
   let snapped_uv = floor(in.uv * resolution / pixel_size) * pixel_size / resolution;
@@ -128,7 +139,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     motion_dir = motion / motion_len;
   }
 
-  let trail_flow = vec2<f32>(trail_dx, trail_dy) * 0.044 * influence;
+  let trail_flow = vec2<f32>(trail_dx, trail_dy) * (0.03 + 0.03 * content_mask) * influence;
   let interactive_offset =
     motion_dir * (0.003 + mouse_velocity * 0.008) * (tip_influence * 0.55 + trail_influence * 0.45) +
     trail_flow;
@@ -152,11 +163,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     sample_safe(base_uv);
   color = mix(color, blurred / 5.0, local_blur);
 
-  let contrast = 1.02 + local_displacement * 0.16;
+  let contrast = 1.02 + local_displacement * 0.18;
   let graded = (color - 0.5) * contrast + 0.5;
   let global_baseline = mix_strength * 0.18;
-  let local_mix = clamp(max(influence * 1.2, global_baseline), 0.0, 1.0);
-  let final_color = mix(sample_safe(in.uv), graded, local_mix);
+  let local_mix = clamp(max(local_influence * (0.45 + content_mask * 1.35), global_baseline), 0.0, 1.0);
+  let final_color = mix(src_center, graded, local_mix);
 
   return vec4<f32>(final_color, 1.0);
 }
@@ -490,11 +501,11 @@ function updateTrailField() {
     const tipBias = Math.pow(t, SETTINGS.tipBoost);
     const alpha = SETTINGS.trailOpacity * pointer.strength * (0.12 + 0.88 * tipBias);
     const r = radiusPx * (0.74 + 0.32 * tipBias);
-    stampTrailSquare(x, y, r, alpha);
+    stampTrailCircle(x, y, r, alpha);
   }
 
   if (pointer.down) {
-    stampTrailSquare(x1, y1, radiusPx * 1.18, SETTINGS.trailOpacity * 0.62);
+    stampTrailCircle(x1, y1, radiusPx * 1.18, SETTINGS.trailOpacity * 0.62);
   }
 
   if (pointer.inside && pointer.strength > 0.03) {
@@ -515,7 +526,7 @@ function updateTrailField() {
     item.life *= pointer.inside ? 0.968 : 0.935;
     const alpha = SETTINGS.trailOpacity * SETTINGS.trailGhost * item.life * (1.0 - age * 0.72);
     const r = radiusPx * (0.62 + item.speed * 0.7) * (1.0 - age * 0.45);
-    stampTrailSquare(item.x, item.y, r, alpha);
+    stampTrailCircle(item.x, item.y, r, alpha);
   }
 
   for (let i = trailHistory.length - 1; i >= 0; i -= 1) {
@@ -570,13 +581,17 @@ function drawTrailDebug() {
   }
 }
 
-function stampTrailSquare(x, y, radius, alpha) {
-  const size = Math.max(2, radius * 2);
-  const x0 = x - size * 0.5;
-  const y0 = y - size * 0.5;
+function stampTrailCircle(x, y, radius, alpha) {
+  const r = Math.max(1, radius);
   trailCtx.globalCompositeOperation = "lighter";
-  trailCtx.fillStyle = `rgba(255,255,255,${clamp01(alpha)})`;
-  trailCtx.fillRect(x0, y0, size, size);
+  const grad = trailCtx.createRadialGradient(x, y, 0, x, y, r);
+  grad.addColorStop(0.0, `rgba(255,255,255,${clamp01(alpha)})`);
+  grad.addColorStop(0.55, `rgba(230,230,230,${clamp01(alpha * 0.58)})`);
+  grad.addColorStop(1.0, "rgba(0,0,0,0)");
+  trailCtx.fillStyle = grad;
+  trailCtx.beginPath();
+  trailCtx.arc(x, y, r, 0, Math.PI * 2);
+  trailCtx.fill();
   trailCtx.globalCompositeOperation = "source-over";
 }
 
