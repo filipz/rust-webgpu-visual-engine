@@ -27,16 +27,21 @@ const SETTINGS = {
   blurGain: 1.0,
   pixelateGain: 1.0,
   globalFx: false,
-  trailDecay: 0.025,
-  trailFeedback: 0.95,
-  trailBlurPx: 3.8,
-  trailAdvection: 1.05,
-  trailOpacity: 0.46,
-  trailRadius: 0.14,
-  trailStretch: 0.6,
-  trailSpacing: 0.2,
-  tipBoost: 1.45,
-  trailTextureMix: 1.25,
+  trailDecay: 0.09,
+  trailFeedback: 0.88,
+  trailBlurPx: 1.2,
+  trailAdvection: 0.45,
+  trailOpacity: 0.18,
+  trailRadius: 0.06,
+  trailStretch: 0.45,
+  trailSpacing: 0.42,
+  tipBoost: 2.2,
+  trailTextureMix: 0.6,
+  trailGhost: 0.52,
+  lensRadius: 0.18,
+  lensEdgeSoftness: 0.05,
+  lensDisplacement: 1.5,
+  lensChroma: 1.45,
 };
 
 const SHADER = /* wgsl */ `
@@ -101,9 +106,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                  textureSample(trail_tex, source_sampler, in.uv - vec2<f32>(0.0, px.y * 2.0)).r;
 
   let dist_to_mouse = distance(in.uv, mouse_uv);
-  let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.52), 2.0) * 3.6) * mouse_strength;
-  let trail_influence = clamp(pow(trail_value, 0.75) * (0.65 + mouse_strength * 0.75), 0.0, 1.2);
-  let influence = clamp(max(trail_influence, tip_influence), 0.0, 1.4);
+  let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.48), 2.0) * 3.8) * mouse_strength;
+  let trail_influence = clamp(pow(trail_value, 0.7) * (0.68 + mouse_strength * 0.85), 0.0, 1.25);
+  let influence = clamp(trail_influence + tip_influence * 0.22, 0.0, 1.45);
 
   let local_displacement = displacement * influence * 2.2;
   let local_chroma = chroma * influence * 2.25;
@@ -122,7 +127,8 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
   let trail_flow = vec2<f32>(trail_dx, trail_dy) * 0.044 * influence;
   let interactive_offset =
-    motion_dir * (0.004 + mouse_velocity * 0.012) * tip_influence + trail_flow;
+    motion_dir * (0.003 + mouse_velocity * 0.008) * (tip_influence * 0.55 + trail_influence * 0.45) +
+    trail_flow;
 
   let offset = interactive_offset * (1.0 + local_displacement);
   let base_uv = snapped_uv + offset;
@@ -194,6 +200,8 @@ const pointer = {
   inside: false,
   down: false,
 };
+const trailHistory = [];
+const MAX_TRAIL_HISTORY = 42;
 
 init().catch((error) => {
   console.error(error);
@@ -430,8 +438,8 @@ function drawSourceLayerToCanvas(ctx, targetCanvas, domRoot) {
 function updateTrailField() {
   const vx = (pointer.x - pointer.prevX) * trailCanvas.width;
   const vy = (pointer.y - pointer.prevY) * trailCanvas.height;
-  const shiftX = vx * SETTINGS.trailAdvection;
-  const shiftY = vy * SETTINGS.trailAdvection;
+  const shiftX = -vx * SETTINGS.trailAdvection;
+  const shiftY = -vy * SETTINGS.trailAdvection;
 
   trailTempCtx.setTransform(1, 0, 0, 1, 0, 0);
   trailTempCtx.globalCompositeOperation = "source-over";
@@ -479,6 +487,33 @@ function updateTrailField() {
 
   if (pointer.down) {
     stampTrailSquare(x1, y1, radiusPx * 1.18, SETTINGS.trailOpacity * 0.62);
+  }
+
+  if (pointer.inside && pointer.strength > 0.03) {
+    trailHistory.unshift({
+      x: x1,
+      y: y1,
+      speed: pointer.velocity,
+      life: 1.0,
+    });
+    if (trailHistory.length > MAX_TRAIL_HISTORY) {
+      trailHistory.pop();
+    }
+  }
+
+  for (let i = 0; i < trailHistory.length; i += 1) {
+    const item = trailHistory[i];
+    const age = i / Math.max(1, trailHistory.length - 1);
+    item.life *= pointer.inside ? 0.968 : 0.935;
+    const alpha = SETTINGS.trailOpacity * SETTINGS.trailGhost * item.life * (1.0 - age * 0.72);
+    const r = radiusPx * (0.62 + item.speed * 0.7) * (1.0 - age * 0.45);
+    stampTrailSquare(item.x, item.y, r, alpha);
+  }
+
+  for (let i = trailHistory.length - 1; i >= 0; i -= 1) {
+    if (trailHistory[i].life < 0.04) {
+      trailHistory.splice(i, 1);
+    }
   }
 }
 
@@ -765,6 +800,7 @@ async function setupControls() {
     f2.addBinding(SETTINGS, "trailStretch", { min: 0.0, max: 1.2, step: 0.01 });
     f2.addBinding(SETTINGS, "trailSpacing", { min: 0.08, max: 0.9, step: 0.01 });
     f2.addBinding(SETTINGS, "tipBoost", { min: 0.2, max: 3.0, step: 0.05 });
+    f2.addBinding(SETTINGS, "trailGhost", { min: 0.0, max: 1.0, step: 0.01 });
     f2.addBinding(SETTINGS, "trailTextureMix", { min: 0.0, max: 1.5, step: 0.01 });
   } catch (error) {
     console.warn("Tweakpane not loaded", error);
