@@ -26,16 +26,17 @@ const SETTINGS = {
   chromaGain: 1.0,
   blurGain: 1.0,
   pixelateGain: 1.0,
-  trailDecay: 0.08,
-  trailFeedback: 0.86,
-  trailBlurPx: 2.2,
-  trailAdvection: 0.9,
-  trailOpacity: 0.34,
-  trailRadius: 0.08,
+  globalFx: false,
+  trailDecay: 0.025,
+  trailFeedback: 0.95,
+  trailBlurPx: 3.8,
+  trailAdvection: 1.05,
+  trailOpacity: 0.46,
+  trailRadius: 0.14,
   trailStretch: 0.6,
-  trailSpacing: 0.28,
-  tipBoost: 1.2,
-  trailTextureMix: 1.0,
+  trailSpacing: 0.2,
+  tipBoost: 1.45,
+  trailTextureMix: 1.25,
 };
 
 const SHADER = /* wgsl */ `
@@ -100,21 +101,17 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
                  textureSample(trail_tex, source_sampler, in.uv - vec2<f32>(0.0, px.y * 2.0)).r;
 
   let dist_to_mouse = distance(in.uv, mouse_uv);
-  let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.55), 2.0) * 3.7) * mouse_strength;
-  let trail_influence = clamp(pow(trail_value, 0.9) * (0.5 + mouse_strength * 0.85), 0.0, 1.15);
-  let influence = clamp(trail_influence + tip_influence * 0.42, 0.0, 1.5);
+  let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.52), 2.0) * 3.6) * mouse_strength;
+  let trail_influence = clamp(pow(trail_value, 0.75) * (0.65 + mouse_strength * 0.75), 0.0, 1.2);
+  let influence = clamp(max(trail_influence, tip_influence), 0.0, 1.4);
 
-  let local_displacement = displacement * (0.25 + influence * 1.9);
-  let local_chroma = chroma * (0.18 + influence * 2.1);
-  let local_pixelate = clamp(pixelate * (0.18 + influence * 2.1), 0.0, 1.0);
-  let local_blur = clamp(blur_amount + influence * 0.33 + mouse_down * 0.07, 0.0, 1.0);
+  let local_displacement = displacement * influence * 2.2;
+  let local_chroma = chroma * influence * 2.25;
+  let local_pixelate = clamp(pixelate * influence * 2.2, 0.0, 1.0);
+  let local_blur = clamp((blur_amount * influence * 2.0) + mouse_down * influence * 0.08, 0.0, 1.0);
 
   let pixel_size = max(1.0, mix(1.0, 22.0, local_pixelate));
   let snapped_uv = floor(in.uv * resolution / pixel_size) * pixel_size / resolution;
-
-  let wave_a = sin((snapped_uv.y + time * 0.34) * 29.0);
-  let wave_b = cos((snapped_uv.x - time * 0.21) * 33.0);
-  let wave_c = sin((snapped_uv.x + snapped_uv.y + time * 0.49) * 21.0);
 
   let motion = mouse_uv - mouse_prev_uv;
   let motion_len = length(motion);
@@ -123,11 +120,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     motion_dir = motion / motion_len;
   }
 
-  let trail_flow = vec2<f32>(trail_dx, trail_dy) * 0.032 * influence;
+  let trail_flow = vec2<f32>(trail_dx, trail_dy) * 0.044 * influence;
   let interactive_offset =
     motion_dir * (0.004 + mouse_velocity * 0.012) * tip_influence + trail_flow;
 
-  let offset = vec2<f32>(wave_a + wave_b, wave_c) * (0.0032 * local_displacement) + interactive_offset;
+  let offset = interactive_offset * (1.0 + local_displacement);
   let base_uv = snapped_uv + offset;
 
   let chroma_shift = vec2<f32>(0.0055 * local_chroma, 0.0);
@@ -146,9 +143,11 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     sample_safe(base_uv);
   color = mix(color, blurred / 5.0, local_blur);
 
-  let contrast = 1.05 + local_displacement * 0.09;
+  let contrast = 1.02 + local_displacement * 0.16;
   let graded = (color - 0.5) * contrast + 0.5;
-  let final_color = mix(sample_safe(in.uv), graded, clamp(mix_strength, 0.0, 1.0));
+  let global_baseline = mix_strength * 0.18;
+  let local_mix = clamp(max(influence * 1.2, global_baseline), 0.0, 1.0);
+  let final_color = mix(sample_safe(in.uv), graded, local_mix);
 
   return vec4<f32>(final_color, 1.0);
 }
@@ -346,7 +345,7 @@ function frame(nowMs) {
   uniformFloats[4] = passSample.fx.chroma * SETTINGS.chromaGain;
   uniformFloats[5] = passSample.fx.pixelate * SETTINGS.pixelateGain;
   uniformFloats[6] = passSample.fx.blur * SETTINGS.blurGain;
-  uniformFloats[7] = 1.0;
+  uniformFloats[7] = SETTINGS.globalFx ? 1.0 : 0.0;
   uniformFloats[8] = pointer.x;
   uniformFloats[9] = pointer.y;
   uniformFloats[10] = pointer.prevX;
@@ -735,12 +734,12 @@ function updatePointerState() {
   const speed = Math.min(1.0, Math.hypot(dx, dy) * 38.0);
   pointer.velocity = mix(pointer.velocity, speed, 0.3);
 
-  pointer.targetStrength = pointer.inside ? (pointer.down ? 1.0 : 0.8) : 0.0;
+  pointer.targetStrength = pointer.inside ? (pointer.down ? 1.0 : 0.95) : 0.0;
   pointer.strength = mix(pointer.strength, pointer.targetStrength, pointer.inside ? 0.2 : 0.08);
 
   const targetRadius = pointer.inside
-    ? 0.09 + pointer.velocity * 0.08 + (pointer.down ? 0.03 : 0.0)
-    : 0.12;
+    ? 0.12 + pointer.velocity * 0.1 + (pointer.down ? 0.04 : 0.0)
+    : 0.16;
   pointer.radius = mix(pointer.radius, targetRadius, 0.16);
 }
 
@@ -750,6 +749,7 @@ async function setupControls() {
     const pane = new Pane({ title: "FX" });
 
     const f1 = pane.addFolder({ title: "Post FX" });
+    f1.addBinding(SETTINGS, "globalFx");
     f1.addBinding(SETTINGS, "displacementGain", { min: 0, max: 2.5, step: 0.01 });
     f1.addBinding(SETTINGS, "chromaGain", { min: 0, max: 2.5, step: 0.01 });
     f1.addBinding(SETTINGS, "blurGain", { min: 0, max: 2.0, step: 0.01 });
