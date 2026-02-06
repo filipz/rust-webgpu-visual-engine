@@ -30,7 +30,8 @@ struct VertexOut {
 struct FxUniform {
   resolution_time_displacement : vec4<f32>,
   chroma_pixelate_blur_mix : vec4<f32>,
-  _pad : vec4<f32>,
+  mouse_current_prev : vec4<f32>,
+  mouse_params : vec4<f32>,
 }
 
 @group(0) @binding(0) var source_tex : texture_2d<f32>;
@@ -65,34 +66,59 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let pixelate = fx.chroma_pixelate_blur_mix.y;
   let blur_amount = fx.chroma_pixelate_blur_mix.z;
   let mix_strength = fx.chroma_pixelate_blur_mix.w;
+  let mouse_uv = fx.mouse_current_prev.xy;
+  let mouse_prev_uv = fx.mouse_current_prev.zw;
+  let mouse_radius = max(0.02, fx.mouse_params.x);
+  let mouse_strength = clamp(fx.mouse_params.y, 0.0, 1.0);
+  let mouse_velocity = clamp(fx.mouse_params.z, 0.0, 1.0);
+  let mouse_down = clamp(fx.mouse_params.w, 0.0, 1.0);
+
+  let dist_to_mouse = distance(in.uv, mouse_uv);
+  let influence = exp(-pow(dist_to_mouse / mouse_radius, 2.0) * 2.8) * mouse_strength;
+  let local_displacement = displacement * (0.35 + influence * 1.65);
+  let local_chroma = chroma * (0.35 + influence * 1.9);
+  let local_pixelate = clamp(pixelate * (0.2 + influence * 2.0), 0.0, 1.0);
+  let local_blur = clamp(blur_amount + influence * 0.26 + mouse_down * 0.05, 0.0, 1.0);
 
   let px = vec2<f32>(1.0 / resolution.x, 1.0 / resolution.y);
-  let pixel_size = max(1.0, mix(1.0, 22.0, clamp(pixelate, 0.0, 1.0)));
+  let pixel_size = max(1.0, mix(1.0, 22.0, clamp(local_pixelate, 0.0, 1.0)));
   let snapped_uv = floor(in.uv * resolution / pixel_size) * pixel_size / resolution;
 
   let wave_a = sin((snapped_uv.y + time * 0.34) * 29.0);
   let wave_b = cos((snapped_uv.x - time * 0.21) * 33.0);
   let wave_c = sin((snapped_uv.x + snapped_uv.y + time * 0.49) * 21.0);
-  let offset = vec2<f32>(wave_a + wave_b, wave_c) * (0.0032 * displacement);
+  let motion = mouse_uv - mouse_prev_uv;
+  let motion_len = length(motion);
+  var motion_dir = vec2<f32>(0.0, 0.0);
+  if (motion_len > 1e-5) {
+    motion_dir = motion / motion_len;
+  }
+  let radial = in.uv - mouse_uv;
+  let radial_len = max(length(radial), 1e-5);
+  let swirl = vec2<f32>(-radial.y, radial.x) / radial_len;
+  let interactive_offset =
+    (motion_dir * (0.006 + mouse_velocity * 0.008) + swirl * 0.004) * influence;
+
+  let offset = vec2<f32>(wave_a + wave_b, wave_c) * (0.0032 * local_displacement) + interactive_offset;
   let base_uv = snapped_uv + offset;
 
-  let chroma_shift = vec2<f32>(0.0055 * chroma, 0.0);
+  let chroma_shift = vec2<f32>(0.0055 * local_chroma, 0.0);
   var color = vec3<f32>(
     sample_safe(base_uv + chroma_shift).r,
     sample_safe(base_uv).g,
     sample_safe(base_uv - chroma_shift).b
   );
 
-  let blur_px = px * (1.0 + blur_amount * 9.0);
+  let blur_px = px * (1.0 + local_blur * 9.0);
   let blurred =
     sample_safe(base_uv + vec2<f32>( blur_px.x, 0.0)) +
     sample_safe(base_uv - vec2<f32>( blur_px.x, 0.0)) +
     sample_safe(base_uv + vec2<f32>(0.0,  blur_px.y)) +
     sample_safe(base_uv - vec2<f32>(0.0,  blur_px.y)) +
     sample_safe(base_uv);
-  color = mix(color, blurred / 5.0, clamp(blur_amount, 0.0, 1.0));
+  color = mix(color, blurred / 5.0, clamp(local_blur, 0.0, 1.0));
 
-  let contrast = 1.06 + displacement * 0.08;
+  let contrast = 1.06 + local_displacement * 0.08;
   let graded = (color - 0.5) * contrast + 0.5;
   let final_color = mix(sample_safe(in.uv), graded, clamp(mix_strength, 0.0, 1.0));
 
@@ -119,8 +145,22 @@ let queue = null;
 let context = null;
 let lastPassLabel = "";
 
-const uniformFloats = new Float32Array(12);
+const uniformFloats = new Float32Array(16);
 const uniformBytes = uniformFloats.byteLength;
+const pointer = {
+  x: 0.5,
+  y: 0.5,
+  prevX: 0.5,
+  prevY: 0.5,
+  targetX: 0.5,
+  targetY: 0.5,
+  radius: 0.14,
+  strength: 0.0,
+  targetStrength: 0.0,
+  velocity: 0.0,
+  inside: false,
+  down: false,
+};
 
 init().catch((error) => {
   console.error(error);
@@ -169,6 +209,7 @@ async function init() {
 
   resize();
   sourceLayer.style.opacity = "0";
+  installPointerHandlers();
   window.addEventListener("resize", resize);
   requestAnimationFrame(frame);
 }
@@ -225,6 +266,7 @@ function resize() {
 function frame(nowMs) {
   const now = nowMs * 0.001;
   const passSample = samplePass(now);
+  updatePointerState();
   updateHud(passSample);
   drawSourceLayerToCanvas(sourceCtx, sourceCanvas, sourceLayer);
   queue.copyExternalImageToTexture(
@@ -241,10 +283,14 @@ function frame(nowMs) {
   uniformFloats[5] = passSample.fx.pixelate;
   uniformFloats[6] = passSample.fx.blur;
   uniformFloats[7] = 1.0;
-  uniformFloats[8] = 0.0;
-  uniformFloats[9] = 0.0;
-  uniformFloats[10] = 0.0;
-  uniformFloats[11] = 0.0;
+  uniformFloats[8] = pointer.x;
+  uniformFloats[9] = pointer.y;
+  uniformFloats[10] = pointer.prevX;
+  uniformFloats[11] = pointer.prevY;
+  uniformFloats[12] = pointer.radius;
+  uniformFloats[13] = pointer.strength;
+  uniformFloats[14] = pointer.velocity;
+  uniformFloats[15] = pointer.down ? 1.0 : 0.0;
   queue.writeBuffer(uniformBuffer, 0, uniformFloats);
 
   const encoder = device.createCommandEncoder({ label: "frame-encoder" });
@@ -493,4 +539,78 @@ function updateWebGpuStatus() {
   }
 
   hudWebgpu.textContent = "available";
+}
+
+function installPointerHandlers() {
+  canvas.addEventListener("pointerenter", (event) => {
+    const uv = pointerToUv(event);
+    if (!uv) {
+      return;
+    }
+    pointer.targetX = uv.x;
+    pointer.targetY = uv.y;
+    pointer.inside = true;
+  });
+
+  canvas.addEventListener("pointermove", (event) => {
+    const uv = pointerToUv(event);
+    if (!uv) {
+      return;
+    }
+    pointer.targetX = uv.x;
+    pointer.targetY = uv.y;
+    pointer.inside = true;
+  });
+
+  canvas.addEventListener("pointerdown", (event) => {
+    const uv = pointerToUv(event);
+    if (!uv) {
+      return;
+    }
+    pointer.targetX = uv.x;
+    pointer.targetY = uv.y;
+    pointer.down = true;
+    pointer.inside = true;
+  });
+
+  window.addEventListener("pointerup", () => {
+    pointer.down = false;
+  });
+
+  canvas.addEventListener("pointerleave", () => {
+    pointer.inside = false;
+    pointer.down = false;
+  });
+}
+
+function pointerToUv(event) {
+  const rect = canvas.getBoundingClientRect();
+  if (!rect.width || !rect.height) {
+    return null;
+  }
+  const x = clamp01((event.clientX - rect.left) / rect.width);
+  const y = clamp01((event.clientY - rect.top) / rect.height);
+  return { x, y };
+}
+
+function updatePointerState() {
+  pointer.prevX = pointer.x;
+  pointer.prevY = pointer.y;
+
+  const follow = pointer.inside ? 0.24 : 0.08;
+  pointer.x = mix(pointer.x, pointer.targetX, follow);
+  pointer.y = mix(pointer.y, pointer.targetY, follow);
+
+  const dx = pointer.x - pointer.prevX;
+  const dy = pointer.y - pointer.prevY;
+  const speed = Math.min(1.0, Math.hypot(dx, dy) * 36.0);
+  pointer.velocity = mix(pointer.velocity, speed, 0.32);
+
+  pointer.targetStrength = pointer.inside ? (pointer.down ? 1.0 : 0.78) : 0.0;
+  pointer.strength = mix(pointer.strength, pointer.targetStrength, pointer.inside ? 0.18 : 0.08);
+
+  const targetRadius = pointer.inside
+    ? 0.13 + pointer.velocity * 0.08 + (pointer.down ? 0.04 : 0.0)
+    : 0.15;
+  pointer.radius = mix(pointer.radius, targetRadius, 0.14);
 }
