@@ -100,6 +100,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 const canvas = document.querySelector("#fx-canvas");
 const sourceLayer = document.querySelector("#source-layer");
 const hudPass = document.querySelector("#hud-pass");
+const hudWebgpu = document.querySelector("#hud-webgpu");
 const passLabel = document.querySelector(".pass-label");
 
 const sourceCanvas = document.createElement("canvas");
@@ -124,6 +125,8 @@ init().catch((error) => {
 });
 
 async function init() {
+  updateWebGpuStatus();
+
   if (!navigator.gpu) {
     showFallback("WebGPU is not available in this browser.");
     return;
@@ -162,6 +165,7 @@ async function init() {
   });
 
   resize();
+  sourceLayer.style.opacity = "0";
   window.addEventListener("resize", resize);
   requestAnimationFrame(frame);
 }
@@ -449,6 +453,9 @@ function showFallback(message) {
   note.textContent = message;
   document.body.appendChild(note);
   sourceLayer.style.opacity = "1";
+  if (hudWebgpu) {
+    hudWebgpu.textContent = "unavailable";
+  }
 }
 
 function mix(a, b, t) {
@@ -461,4 +468,22 @@ function clamp01(v) {
 
 function smoothstep(t) {
   return t * t * (3 - 2 * t);
+}
+
+function updateWebGpuStatus() {
+  if (!hudWebgpu) {
+    return;
+  }
+
+  if (!window.isSecureContext) {
+    hudWebgpu.textContent = "blocked (insecure context)";
+    return;
+  }
+
+  if (!navigator.gpu) {
+    hudWebgpu.textContent = "not supported";
+    return;
+  }
+
+  hudWebgpu.textContent = "available";
 }

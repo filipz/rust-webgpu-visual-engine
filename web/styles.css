@@ -43,7 +43,7 @@ body {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2.5rem;
-  opacity: 0;
+  opacity: 1;
   pointer-events: none;
 }
 
