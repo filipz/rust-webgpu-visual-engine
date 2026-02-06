@@ -1,7 +1,8 @@
 use super::config::{EmitterConfig, ForceConfig, ParticleSimConfig};
+use bytemuck::{Pod, Zeroable};
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 pub struct Particle {
     pub position: [f32; 3],
     pub age_seconds: f32,
@@ -64,7 +65,10 @@ impl ParticleState {
             let to_attractor = sub(force.attractor, particle.position);
             let attraction = mul_scalar(normalize_or_zero(to_attractor), force.attractor_strength);
             let accel = add(force.gravity, attraction);
-            particle.velocity = add(mul_scalar(particle.velocity, config.drag), mul_scalar(accel, clamped_dt));
+            particle.velocity = add(
+                mul_scalar(particle.velocity, config.drag),
+                mul_scalar(accel, clamped_dt),
+            );
             particle.position = add(particle.position, mul_scalar(particle.velocity, clamped_dt));
         }
 
@@ -100,7 +104,11 @@ impl ParticleState {
 
             let angle = s * std::f32::consts::TAU;
             let radial = emitter.radius * t.sqrt();
-            let offset = [radial * angle.cos(), radial * angle.sin(), (u - 0.5) * emitter.radius];
+            let offset = [
+                radial * angle.cos(),
+                radial * angle.sin(),
+                (u - 0.5) * emitter.radius,
+            ];
             let direction = normalize_or_zero(add(offset, [0.001, 0.001, 0.001]));
             let noise_push = mul_scalar(direction, force.noise_strength);
 
@@ -191,7 +199,12 @@ mod tests {
             ..ParticleSimConfig::default()
         };
         let mut state = ParticleState::new(config);
-        state.step_reference(1.0 / 60.0, config, EmitterConfig::default(), ForceConfig::default());
+        state.step_reference(
+            1.0 / 60.0,
+            config,
+            EmitterConfig::default(),
+            ForceConfig::default(),
+        );
         assert!(state.alive_count() > 0);
     }
 }

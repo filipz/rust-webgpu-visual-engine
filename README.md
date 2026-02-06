@@ -30,6 +30,31 @@ Detailed milestones and model-switch guidance are in `ROADMAP.md`.
 cargo test
 ```
 
+## Run Simulation Smoke Test
+
+```bash
+cargo run -- --seconds 8 --fps 120
+```
+
+Useful variants:
+
+```bash
+cargo run -- --seconds 3 --fps 60
+cargo run -- --seconds 12 --fps 144
+```
+
+## Run GPU Compute Smoke Test (Step 1)
+
+```bash
+cargo run --example gpu_smoke
+```
+
+Expected output shape:
+
+```text
+gpu_smoke ok: particle_count=... sampled=128 alive_in_sample=...
+```
+
 ## Push To GitHub
 
 ```bash

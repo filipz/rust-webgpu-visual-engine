@@ -9,3 +9,10 @@ repository = "https://github.com/filipz/rust-webgpu-visual-engine"
 [lib]
 name = "rust_webgpu_visual_engine"
 path = "src/lib.rs"
+
+[dependencies]
+bytemuck = { version = "1.24.0", features = ["derive"] }
+wgpu = "0.20.1"
+
+[dev-dependencies]
+pollster = "0.3.0"
