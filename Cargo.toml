@@ -1,0 +1,11 @@
+[package]
+name = "rust-webgpu-visual-engine"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Rust + WebGPU visual engine for MTSDF text, particles, point clouds, and gaussian splatting."
+repository = "https://github.com/filipz/rust-webgpu-visual-engine"
+
+[lib]
+name = "rust_webgpu_visual_engine"
+path = "src/lib.rs"

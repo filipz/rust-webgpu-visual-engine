@@ -1,10 +1,19 @@
-# webgl-rust
+# rust-webgpu-visual-engine
 
 Rust + WebGPU rendering stack focused on:
 - MTSDF text rendering with HTML/canvas metric alignment
 - Particle simulation
 - Point cloud rendering
 - Gaussian splatting
+
+## Current Status
+
+- Repo initialized and connected to GitHub remote.
+- Phase 1 scaffolding added:
+  - `src/particles/config.rs`
+  - `src/particles/simulation.rs`
+  - `src/particles/compute.rs`
+  - `shaders/particles_update.wgsl`
 
 ## Execution Order
 
@@ -15,11 +24,16 @@ Rust + WebGPU rendering stack focused on:
 
 Detailed milestones and model-switch guidance are in `ROADMAP.md`.
 
-## Git Remote Setup (when ready)
+## Local Build
 
 ```bash
-git remote add origin <your-repo-url>
+cargo test
+```
+
+## Push To GitHub
+
+```bash
 git add .
-git commit -m "chore: initialize project"
+git commit -m "feat: scaffold particle simulation phase"
 git push -u origin main
 ```
