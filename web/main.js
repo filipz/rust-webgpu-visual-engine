@@ -41,6 +41,9 @@ const SETTINGS = {
   showDebugTrail: true,
   debugContrast: 2.4,
   debugBrightness: 1.1,
+  trailToFx: 1.35,
+  maskToFx: 1.75,
+  effectStrength: 1.2,
   lensRadius: 0.18,
   lensEdgeSoftness: 0.05,
   lensDisplacement: 1.5,
@@ -58,12 +61,14 @@ struct FxUniform {
   chroma_pixelate_blur_mix : vec4<f32>,
   mouse_current_prev : vec4<f32>,
   mouse_params : vec4<f32>,
+  controls : vec4<f32>,
 }
 
 @group(0) @binding(0) var source_tex : texture_2d<f32>;
 @group(0) @binding(1) var source_sampler : sampler;
 @group(0) @binding(2) var<uniform> fx : FxUniform;
 @group(0) @binding(3) var trail_tex : texture_2d<f32>;
+@group(0) @binding(4) var mask_tex : texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
@@ -100,17 +105,19 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let mouse_strength = clamp(fx.mouse_params.y, 0.0, 1.0);
   let mouse_velocity = clamp(fx.mouse_params.z, 0.0, 1.0);
   let mouse_down = clamp(fx.mouse_params.w, 0.0, 1.0);
+  let trail_to_fx = max(0.0, fx.controls.x);
+  let mask_to_fx = max(0.0, fx.controls.y);
+  let effect_strength = max(0.0, fx.controls.z);
 
   let px = vec2<f32>(1.0 / resolution.x, 1.0 / resolution.y);
   let src_center = sample_safe(in.uv);
-  let lum_weights = vec3<f32>(0.299, 0.587, 0.114);
-  let src_luma = dot(src_center, lum_weights);
-  let src_l = dot(sample_safe(in.uv - vec2<f32>(px.x * 1.5, 0.0)), lum_weights);
-  let src_r = dot(sample_safe(in.uv + vec2<f32>(px.x * 1.5, 0.0)), lum_weights);
-  let src_t = dot(sample_safe(in.uv + vec2<f32>(0.0, px.y * 1.5)), lum_weights);
-  let src_b = dot(sample_safe(in.uv - vec2<f32>(0.0, px.y * 1.5)), lum_weights);
-  let edge_mask = clamp((abs(src_l - src_r) + abs(src_t - src_b)) * 2.8, 0.0, 1.0);
-  let content_mask = clamp((1.0 - src_luma) * 1.15 + edge_mask * 1.25, 0.0, 1.6);
+  let mask_value = textureSample(mask_tex, source_sampler, in.uv).r;
+  let mask_l = textureSample(mask_tex, source_sampler, in.uv - vec2<f32>(px.x * 1.5, 0.0)).r;
+  let mask_r = textureSample(mask_tex, source_sampler, in.uv + vec2<f32>(px.x * 1.5, 0.0)).r;
+  let mask_t = textureSample(mask_tex, source_sampler, in.uv + vec2<f32>(0.0, px.y * 1.5)).r;
+  let mask_b = textureSample(mask_tex, source_sampler, in.uv - vec2<f32>(0.0, px.y * 1.5)).r;
+  let edge_mask = clamp((abs(mask_l - mask_r) + abs(mask_t - mask_b)) * 3.0, 0.0, 1.0);
+  let content_mask = clamp(mask_value * 1.25 + edge_mask * 0.75, 0.0, 1.75);
 
   let trail_value = textureSample(trail_tex, source_sampler, in.uv).r;
   let trail_dx = textureSample(trail_tex, source_sampler, in.uv + vec2<f32>(px.x * 2.0, 0.0)).r -
@@ -120,9 +127,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
   let dist_to_mouse = distance(in.uv, mouse_uv);
   let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.48), 2.0) * 3.8) * mouse_strength;
-  let trail_influence = clamp(pow(trail_value, 0.7) * (0.68 + mouse_strength * 0.85), 0.0, 1.25);
+  let trail_influence = clamp(pow(trail_value, 0.66) * trail_to_fx, 0.0, 1.5);
   let influence = clamp(trail_influence + tip_influence * 0.22, 0.0, 1.45);
-  let local_influence = influence * (0.45 + content_mask * 1.1);
+  let local_influence = influence * (0.2 + content_mask * mask_to_fx) * effect_strength;
 
   let local_displacement = displacement * local_influence * 2.35;
   let local_chroma = chroma * local_influence * 2.35;
@@ -165,7 +172,7 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
 
   let contrast = 1.02 + local_displacement * 0.18;
   let graded = (color - 0.5) * contrast + 0.5;
-  let global_baseline = mix_strength * 0.18;
+  let global_baseline = mix_strength * 0.08;
   let local_mix = clamp(max(local_influence * (0.45 + content_mask * 1.35), global_baseline), 0.0, 1.0);
   let final_color = mix(src_center, graded, local_mix);
 
@@ -189,9 +196,12 @@ const trailCanvas = document.createElement("canvas");
 const trailCtx = trailCanvas.getContext("2d");
 const trailTempCanvas = document.createElement("canvas");
 const trailTempCtx = trailTempCanvas.getContext("2d");
+const maskCanvas = document.createElement("canvas");
+const maskCtx = maskCanvas.getContext("2d");
 
 let sourceTexture = null;
 let trailTexture = null;
+let maskTexture = null;
 let sampler = null;
 let bindGroup = null;
 let presentationFormat = null;
@@ -202,7 +212,7 @@ let queue = null;
 let context = null;
 let lastPassLabel = "";
 
-const uniformFloats = new Float32Array(16);
+const uniformFloats = new Float32Array(20);
 const uniformBytes = uniformFloats.byteLength;
 const pointer = {
   x: 0.5,
@@ -300,6 +310,8 @@ function resize() {
   trailCanvas.height = height;
   trailTempCanvas.width = width;
   trailTempCanvas.height = height;
+  maskCanvas.width = width;
+  maskCanvas.height = height;
 
   trailCtx.setTransform(1, 0, 0, 1, 0, 0);
   trailCtx.fillStyle = "black";
@@ -322,6 +334,13 @@ function resize() {
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
   });
 
+  maskTexture = device.createTexture({
+    label: "dom-mask-texture",
+    size: [width, height, 1],
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+
   sampler = device.createSampler({
     magFilter: "linear",
     minFilter: "linear",
@@ -338,6 +357,7 @@ function resize() {
       { binding: 1, resource: sampler },
       { binding: 2, resource: { buffer: uniformBuffer } },
       { binding: 3, resource: trailTexture.createView() },
+      { binding: 4, resource: maskTexture.createView() },
     ],
   });
 }
@@ -350,6 +370,7 @@ function frame(nowMs) {
   updateHud(passSample);
 
   drawSourceLayerToCanvas(sourceCtx, sourceCanvas, sourceLayer);
+  drawMaskLayerToCanvas(maskCtx, maskCanvas, sourceLayer);
   updateTrailField();
   drawTrailDebug();
 
@@ -363,6 +384,12 @@ function frame(nowMs) {
     { source: trailCanvas },
     { texture: trailTexture },
     [trailCanvas.width, trailCanvas.height],
+  );
+
+  queue.copyExternalImageToTexture(
+    { source: maskCanvas },
+    { texture: maskTexture },
+    [maskCanvas.width, maskCanvas.height],
   );
 
   uniformFloats[0] = canvas.width;
@@ -381,6 +408,10 @@ function frame(nowMs) {
   uniformFloats[13] = pointer.strength * SETTINGS.trailTextureMix;
   uniformFloats[14] = pointer.velocity;
   uniformFloats[15] = pointer.down ? 1.0 : 0.0;
+  uniformFloats[16] = SETTINGS.trailToFx;
+  uniformFloats[17] = SETTINGS.maskToFx;
+  uniformFloats[18] = SETTINGS.effectStrength;
+  uniformFloats[19] = 0.0;
   queue.writeBuffer(uniformBuffer, 0, uniformFloats);
 
   const encoder = device.createCommandEncoder({ label: "frame-encoder" });
@@ -452,6 +483,18 @@ function drawSourceLayerToCanvas(ctx, targetCanvas, domRoot) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawSurfaces(ctx, domRoot);
   drawTextNodes(ctx, domRoot);
+}
+
+function drawMaskLayerToCanvas(ctx, targetCanvas, domRoot) {
+  const dpr = targetCanvas.width / Math.max(window.innerWidth, 1);
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+  ctx.fillStyle = "black";
+  ctx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  drawMaskSurfaces(ctx, domRoot);
+  drawMaskTextNodes(ctx, domRoot);
 }
 
 function updateTrailField() {
@@ -575,10 +618,19 @@ function drawTrailDebug() {
   debugCtx.stroke();
 
   if (debugStats) {
+    const trailAtPointer = sampleCanvasRedAtUv(trailCtx, trailCanvas, pointer.x, pointer.y);
+    const maskAtPointer = sampleCanvasRedAtUv(maskCtx, maskCanvas, pointer.x, pointer.y);
     debugStats.textContent =
       `trail=${pointer.strength.toFixed(2)} vel=${pointer.velocity.toFixed(2)} ` +
-      `hist=${trailHistory.length}`;
+      `hist=${trailHistory.length} tpx=${trailAtPointer.toFixed(2)} mpx=${maskAtPointer.toFixed(2)}`;
   }
+}
+
+function sampleCanvasRedAtUv(ctx, canvasEl, u, v) {
+  const x = Math.max(0, Math.min(canvasEl.width - 1, Math.floor(u * canvasEl.width)));
+  const y = Math.max(0, Math.min(canvasEl.height - 1, Math.floor(v * canvasEl.height)));
+  const data = ctx.getImageData(x, y, 1, 1).data;
+  return data[0] / 255;
 }
 
 function stampTrailCircle(x, y, radius, alpha) {
@@ -623,6 +675,19 @@ function drawSurfaces(ctx, root) {
   }
 }
 
+function drawMaskSurfaces(ctx, root) {
+  const surfaces = root.querySelectorAll(".fx-surface");
+  ctx.fillStyle = "white";
+  for (const el of surfaces) {
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      continue;
+    }
+    roundRect(ctx, rect.left, rect.top, rect.width, rect.height, 8);
+    ctx.fill();
+  }
+}
+
 function drawTextNodes(ctx, root) {
   const nodes = root.querySelectorAll(".fx-source");
   for (const el of nodes) {
@@ -641,6 +706,39 @@ function drawTextNodes(ctx, root) {
 
     ctx.font = `${fontStyle} ${fontWeight} ${fontSize} ${fontFamily}`;
     ctx.fillStyle = style.color || "#111111";
+    ctx.textBaseline = "top";
+
+    const text = (el.textContent || "").trim();
+    if (!text) {
+      continue;
+    }
+
+    if (el.tagName === "P") {
+      drawWrappedText(ctx, text, rect.left, rect.top, rect.width, lineHeight, letterSpacing);
+    } else {
+      drawTextWithSpacing(ctx, text, rect.left, rect.top, letterSpacing);
+    }
+  }
+}
+
+function drawMaskTextNodes(ctx, root) {
+  const nodes = root.querySelectorAll(".fx-source");
+  for (const el of nodes) {
+    const rect = el.getBoundingClientRect();
+    if (!rect.width || !rect.height) {
+      continue;
+    }
+
+    const style = getComputedStyle(el);
+    const fontSize = style.fontSize;
+    const fontWeight = style.fontWeight || "400";
+    const fontStyle = style.fontStyle || "normal";
+    const fontFamily = style.fontFamily || "sans-serif";
+    const lineHeight = parseLineHeight(style.lineHeight, style.fontSize);
+    const letterSpacing = parseFloat(style.letterSpacing) || 0;
+
+    ctx.font = `${fontStyle} ${fontWeight} ${fontSize} ${fontFamily}`;
+    ctx.fillStyle = "white";
     ctx.textBaseline = "top";
 
     const text = (el.textContent || "").trim();
@@ -857,6 +955,9 @@ async function setupControls() {
     f1.addBinding(SETTINGS, "chromaGain", { min: 0, max: 2.5, step: 0.01 });
     f1.addBinding(SETTINGS, "blurGain", { min: 0, max: 2.0, step: 0.01 });
     f1.addBinding(SETTINGS, "pixelateGain", { min: 0, max: 2.0, step: 0.01 });
+    f1.addBinding(SETTINGS, "trailToFx", { min: 0.0, max: 3.0, step: 0.01 });
+    f1.addBinding(SETTINGS, "maskToFx", { min: 0.0, max: 3.0, step: 0.01 });
+    f1.addBinding(SETTINGS, "effectStrength", { min: 0.0, max: 3.0, step: 0.01 });
 
     const f2 = pane.addFolder({ title: "Trail" });
     f2.addBinding(SETTINGS, "trailDecay", { min: 0.01, max: 0.45, step: 0.005 });
