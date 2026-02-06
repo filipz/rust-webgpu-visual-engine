@@ -46,6 +46,8 @@ http://localhost:4173
 Demo behavior:
 - Mirrors DOM text/surfaces into an offscreen texture.
 - Applies pass-style post FX (`Mtsdf pass 01/02/03` + `Recovery`) with displacement/chromatic/blur/pixelate.
+- Includes a persistent mouse trail field (tip-strong + tapered tail).
+- Loads Tweakpane controls from CDN when available.
 
 ## Run Simulation Smoke Test
 

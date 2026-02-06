@@ -21,9 +21,19 @@ const PASSES = [
   },
 ];
 
-const SHADER = /* wgsl */ `
-const TRAIL_SAMPLES : u32 = 8u;
+const SETTINGS = {
+  displacementGain: 1.0,
+  chromaGain: 1.0,
+  blurGain: 1.0,
+  pixelateGain: 1.0,
+  trailDecay: 0.16,
+  trailOpacity: 0.22,
+  trailRadius: 0.12,
+  trailStretch: 0.45,
+  trailTextureMix: 1.0,
+};
 
+const SHADER = /* wgsl */ `
 struct VertexOut {
   @builtin(position) position : vec4<f32>,
   @location(0) uv : vec2<f32>,
@@ -34,12 +44,12 @@ struct FxUniform {
   chroma_pixelate_blur_mix : vec4<f32>,
   mouse_current_prev : vec4<f32>,
   mouse_params : vec4<f32>,
-  trail : array<vec4<f32>, TRAIL_SAMPLES>,
 }
 
 @group(0) @binding(0) var source_tex : texture_2d<f32>;
 @group(0) @binding(1) var source_sampler : sampler;
 @group(0) @binding(2) var<uniform> fx : FxUniform;
+@group(0) @binding(3) var trail_tex : texture_2d<f32>;
 
 @vertex
 fn vs_main(@builtin(vertex_index) vertex_index: u32) -> VertexOut {
@@ -69,54 +79,52 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
   let pixelate = fx.chroma_pixelate_blur_mix.y;
   let blur_amount = fx.chroma_pixelate_blur_mix.z;
   let mix_strength = fx.chroma_pixelate_blur_mix.w;
+
   let mouse_uv = fx.mouse_current_prev.xy;
+  let mouse_prev_uv = fx.mouse_current_prev.zw;
   let mouse_radius = max(0.02, fx.mouse_params.x);
   let mouse_strength = clamp(fx.mouse_params.y, 0.0, 1.0);
   let mouse_velocity = clamp(fx.mouse_params.z, 0.0, 1.0);
   let mouse_down = clamp(fx.mouse_params.w, 0.0, 1.0);
 
-  let dist_to_mouse = distance(in.uv, mouse_uv);
-  let base_mouse_influence = exp(-pow(dist_to_mouse / mouse_radius, 2.0) * 2.8) * mouse_strength;
-
-  var trail_influence = 0.0;
-  for (var i: u32 = 0u; i < TRAIL_SAMPLES; i = i + 1u) {
-    let tp = fx.trail[i];
-    let tpos = tp.xy;
-    let tradius = max(0.012, tp.z);
-    let tweight = tp.w;
-    let d = distance(in.uv, tpos);
-    let inf = exp(-pow(d / tradius, 2.0) * 3.0) * tweight;
-    trail_influence = max(trail_influence, inf);
-  }
-
-  let tip = fx.trail[0u];
-  let tip_dist = distance(in.uv, tip.xy);
-  let tip_influence = exp(-pow(tip_dist / max(0.01, tip.z * 0.72), 2.0) * 3.2) * tip.w;
-
-  let influence = clamp(max(base_mouse_influence, trail_influence) + tip_influence * 0.35, 0.0, 1.5);
-  let local_displacement = displacement * (0.35 + influence * 1.65);
-  let local_chroma = chroma * (0.35 + influence * 1.9);
-  let local_pixelate = clamp(pixelate * (0.2 + influence * 2.0), 0.0, 1.0);
-  let local_blur = clamp(blur_amount + influence * 0.26 + mouse_down * 0.05, 0.0, 1.0);
-
   let px = vec2<f32>(1.0 / resolution.x, 1.0 / resolution.y);
-  let pixel_size = max(1.0, mix(1.0, 22.0, clamp(local_pixelate, 0.0, 1.0)));
+  let trail_value = textureSample(trail_tex, source_sampler, in.uv).r;
+  let trail_dx = textureSample(trail_tex, source_sampler, in.uv + vec2<f32>(px.x * 2.0, 0.0)).r -
+                 textureSample(trail_tex, source_sampler, in.uv - vec2<f32>(px.x * 2.0, 0.0)).r;
+  let trail_dy = textureSample(trail_tex, source_sampler, in.uv + vec2<f32>(0.0, px.y * 2.0)).r -
+                 textureSample(trail_tex, source_sampler, in.uv - vec2<f32>(0.0, px.y * 2.0)).r;
+
+  let dist_to_mouse = distance(in.uv, mouse_uv);
+  let tip_influence = exp(-pow(dist_to_mouse / (mouse_radius * 0.75), 2.0) * 3.3) * mouse_strength;
+  let trail_influence = clamp(trail_value * (0.35 + mouse_strength * 0.65), 0.0, 1.0);
+  let influence = clamp(max(tip_influence, trail_influence), 0.0, 1.4);
+
+  let local_displacement = displacement * (0.25 + influence * 1.9);
+  let local_chroma = chroma * (0.18 + influence * 2.1);
+  let local_pixelate = clamp(pixelate * (0.18 + influence * 2.1), 0.0, 1.0);
+  let local_blur = clamp(blur_amount + influence * 0.33 + mouse_down * 0.07, 0.0, 1.0);
+
+  let pixel_size = max(1.0, mix(1.0, 22.0, local_pixelate));
   let snapped_uv = floor(in.uv * resolution / pixel_size) * pixel_size / resolution;
 
   let wave_a = sin((snapped_uv.y + time * 0.34) * 29.0);
   let wave_b = cos((snapped_uv.x - time * 0.21) * 33.0);
   let wave_c = sin((snapped_uv.x + snapped_uv.y + time * 0.49) * 21.0);
-  let motion = fx.trail[0u].xy - fx.trail[1u].xy;
+
+  let motion = mouse_uv - mouse_prev_uv;
   let motion_len = length(motion);
   var motion_dir = vec2<f32>(0.0, 0.0);
   if (motion_len > 1e-5) {
     motion_dir = motion / motion_len;
   }
+
   let radial = in.uv - mouse_uv;
   let radial_len = max(length(radial), 1e-5);
   let swirl = vec2<f32>(-radial.y, radial.x) / radial_len;
+
+  let trail_flow = vec2<f32>(trail_dx, trail_dy) * 0.024 * influence;
   let interactive_offset =
-    (motion_dir * (0.006 + mouse_velocity * 0.008) + swirl * 0.004) * influence;
+    (motion_dir * (0.006 + mouse_velocity * 0.012) + swirl * 0.0045) * influence + trail_flow;
 
   let offset = vec2<f32>(wave_a + wave_b, wave_c) * (0.0032 * local_displacement) + interactive_offset;
   let base_uv = snapped_uv + offset;
@@ -135,9 +143,9 @@ fn fs_main(in: VertexOut) -> @location(0) vec4<f32> {
     sample_safe(base_uv + vec2<f32>(0.0,  blur_px.y)) +
     sample_safe(base_uv - vec2<f32>(0.0,  blur_px.y)) +
     sample_safe(base_uv);
-  color = mix(color, blurred / 5.0, clamp(local_blur, 0.0, 1.0));
+  color = mix(color, blurred / 5.0, local_blur);
 
-  let contrast = 1.06 + local_displacement * 0.08;
+  let contrast = 1.05 + local_displacement * 0.09;
   let graded = (color - 0.5) * contrast + 0.5;
   let final_color = mix(sample_safe(in.uv), graded, clamp(mix_strength, 0.0, 1.0));
 
@@ -153,9 +161,12 @@ const passLabel = document.querySelector(".pass-label");
 
 const sourceCanvas = document.createElement("canvas");
 const sourceCtx = sourceCanvas.getContext("2d");
-const TRAIL_SAMPLES = 8;
+const trailCanvas = document.createElement("canvas");
+const trailCtx = trailCanvas.getContext("2d");
 
 let sourceTexture = null;
+let trailTexture = null;
+let sampler = null;
 let bindGroup = null;
 let presentationFormat = null;
 let pipeline = null;
@@ -165,7 +176,7 @@ let queue = null;
 let context = null;
 let lastPassLabel = "";
 
-const uniformFloats = new Float32Array(16 + TRAIL_SAMPLES * 4);
+const uniformFloats = new Float32Array(16);
 const uniformBytes = uniformFloats.byteLength;
 const pointer = {
   x: 0.5,
@@ -174,19 +185,13 @@ const pointer = {
   prevY: 0.5,
   targetX: 0.5,
   targetY: 0.5,
-  radius: 0.14,
+  radius: 0.115,
   strength: 0.0,
   targetStrength: 0.0,
   velocity: 0.0,
   inside: false,
   down: false,
 };
-const trail = Array.from({ length: TRAIL_SAMPLES }, () => ({
-  x: 0.5,
-  y: 0.5,
-  radius: 0.13,
-  weight: 0.0,
-}));
 
 init().catch((error) => {
   console.error(error);
@@ -195,6 +200,7 @@ init().catch((error) => {
 
 async function init() {
   updateWebGpuStatus();
+  setupControls();
 
   if (!navigator.gpu) {
     showFallback("WebGPU is not available in this browser.");
@@ -262,6 +268,12 @@ function resize() {
 
   sourceCanvas.width = width;
   sourceCanvas.height = height;
+  trailCanvas.width = width;
+  trailCanvas.height = height;
+
+  trailCtx.setTransform(1, 0, 0, 1, 0, 0);
+  trailCtx.fillStyle = "black";
+  trailCtx.fillRect(0, 0, trailCanvas.width, trailCanvas.height);
 
   sourceTexture = device.createTexture({
     label: "source-dom-texture",
@@ -270,7 +282,14 @@ function resize() {
     usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT,
   });
 
-  const sampler = device.createSampler({
+  trailTexture = device.createTexture({
+    label: "trail-field-texture",
+    size: [width, height, 1],
+    format: "rgba8unorm",
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+  });
+
+  sampler = device.createSampler({
     magFilter: "linear",
     minFilter: "linear",
     mipmapFilter: "linear",
@@ -285,6 +304,7 @@ function resize() {
       { binding: 0, resource: sourceTexture.createView() },
       { binding: 1, resource: sampler },
       { binding: 2, resource: { buffer: uniformBuffer } },
+      { binding: 3, resource: trailTexture.createView() },
     ],
   });
 }
@@ -292,38 +312,41 @@ function resize() {
 function frame(nowMs) {
   const now = nowMs * 0.001;
   const passSample = samplePass(now);
+
   updatePointerState();
   updateHud(passSample);
+
   drawSourceLayerToCanvas(sourceCtx, sourceCanvas, sourceLayer);
+  updateTrailField();
+
   queue.copyExternalImageToTexture(
     { source: sourceCanvas },
     { texture: sourceTexture },
     [sourceCanvas.width, sourceCanvas.height],
   );
 
+  queue.copyExternalImageToTexture(
+    { source: trailCanvas },
+    { texture: trailTexture },
+    [trailCanvas.width, trailCanvas.height],
+  );
+
   uniformFloats[0] = canvas.width;
   uniformFloats[1] = canvas.height;
   uniformFloats[2] = now;
-  uniformFloats[3] = passSample.fx.displacement;
-  uniformFloats[4] = passSample.fx.chroma;
-  uniformFloats[5] = passSample.fx.pixelate;
-  uniformFloats[6] = passSample.fx.blur;
+  uniformFloats[3] = passSample.fx.displacement * SETTINGS.displacementGain;
+  uniformFloats[4] = passSample.fx.chroma * SETTINGS.chromaGain;
+  uniformFloats[5] = passSample.fx.pixelate * SETTINGS.pixelateGain;
+  uniformFloats[6] = passSample.fx.blur * SETTINGS.blurGain;
   uniformFloats[7] = 1.0;
   uniformFloats[8] = pointer.x;
   uniformFloats[9] = pointer.y;
   uniformFloats[10] = pointer.prevX;
   uniformFloats[11] = pointer.prevY;
   uniformFloats[12] = pointer.radius;
-  uniformFloats[13] = pointer.strength;
+  uniformFloats[13] = pointer.strength * SETTINGS.trailTextureMix;
   uniformFloats[14] = pointer.velocity;
   uniformFloats[15] = pointer.down ? 1.0 : 0.0;
-  for (let i = 0; i < TRAIL_SAMPLES; i += 1) {
-    const base = 16 + i * 4;
-    uniformFloats[base] = trail[i].x;
-    uniformFloats[base + 1] = trail[i].y;
-    uniformFloats[base + 2] = trail[i].radius;
-    uniformFloats[base + 3] = trail[i].weight;
-  }
   queue.writeBuffer(uniformBuffer, 0, uniformFloats);
 
   const encoder = device.createCommandEncoder({ label: "frame-encoder" });
@@ -395,6 +418,59 @@ function drawSourceLayerToCanvas(ctx, targetCanvas, domRoot) {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   drawSurfaces(ctx, domRoot);
   drawTextNodes(ctx, domRoot);
+}
+
+function updateTrailField() {
+  trailCtx.setTransform(1, 0, 0, 1, 0, 0);
+  trailCtx.globalCompositeOperation = "source-over";
+  trailCtx.fillStyle = `rgba(0, 0, 0, ${clamp01(SETTINGS.trailDecay)})`;
+  trailCtx.fillRect(0, 0, trailCanvas.width, trailCanvas.height);
+
+  if (pointer.strength < 0.005 && !pointer.down) {
+    return;
+  }
+
+  const x0 = pointer.prevX * trailCanvas.width;
+  const y0 = pointer.prevY * trailCanvas.height;
+  const x1 = pointer.x * trailCanvas.width;
+  const y1 = pointer.y * trailCanvas.height;
+  const dx = x1 - x0;
+  const dy = y1 - y0;
+  const segment = Math.max(1, Math.hypot(dx, dy));
+
+  const radiusPx = Math.max(
+    6,
+    trailCanvas.width * SETTINGS.trailRadius * (0.85 + pointer.velocity * SETTINGS.trailStretch),
+  );
+
+  const steps = Math.max(1, Math.ceil(segment / Math.max(2, radiusPx * 0.28)));
+  for (let i = 0; i <= steps; i += 1) {
+    const t = steps === 0 ? 1 : i / steps;
+    const x = x0 + dx * t;
+    const y = y0 + dy * t;
+
+    const tipBias = Math.pow(t, 1.8);
+    const alpha = SETTINGS.trailOpacity * pointer.strength * (0.16 + 0.84 * tipBias);
+    const r = radiusPx * (0.8 + 0.25 * t);
+    stampTrail(x, y, r, alpha);
+  }
+
+  if (pointer.down) {
+    stampTrail(x1, y1, radiusPx * 1.15, SETTINGS.trailOpacity * 0.5);
+  }
+}
+
+function stampTrail(x, y, radius, alpha) {
+  trailCtx.globalCompositeOperation = "lighter";
+  const grad = trailCtx.createRadialGradient(x, y, 0, x, y, radius);
+  grad.addColorStop(0, `rgba(255,255,255,${Math.max(0, alpha)})`);
+  grad.addColorStop(0.5, `rgba(210,210,210,${Math.max(0, alpha * 0.42)})`);
+  grad.addColorStop(1.0, "rgba(0,0,0,0)");
+  trailCtx.fillStyle = grad;
+  trailCtx.beginPath();
+  trailCtx.arc(x, y, radius, 0, Math.PI * 2);
+  trailCtx.fill();
+  trailCtx.globalCompositeOperation = "source-over";
 }
 
 function drawBackdrop(ctx, width, height) {
@@ -636,38 +712,36 @@ function updatePointerState() {
 
   const dx = pointer.x - pointer.prevX;
   const dy = pointer.y - pointer.prevY;
-  const speed = Math.min(1.0, Math.hypot(dx, dy) * 36.0);
-  pointer.velocity = mix(pointer.velocity, speed, 0.32);
+  const speed = Math.min(1.0, Math.hypot(dx, dy) * 38.0);
+  pointer.velocity = mix(pointer.velocity, speed, 0.3);
 
-  pointer.targetStrength = pointer.inside ? (pointer.down ? 1.0 : 0.78) : 0.0;
-  pointer.strength = mix(pointer.strength, pointer.targetStrength, pointer.inside ? 0.18 : 0.08);
+  pointer.targetStrength = pointer.inside ? (pointer.down ? 1.0 : 0.8) : 0.0;
+  pointer.strength = mix(pointer.strength, pointer.targetStrength, pointer.inside ? 0.2 : 0.08);
 
   const targetRadius = pointer.inside
-    ? 0.13 + pointer.velocity * 0.08 + (pointer.down ? 0.04 : 0.0)
-    : 0.15;
-  pointer.radius = mix(pointer.radius, targetRadius, 0.14);
-
-  updateTrail();
+    ? 0.09 + pointer.velocity * 0.08 + (pointer.down ? 0.03 : 0.0)
+    : 0.12;
+  pointer.radius = mix(pointer.radius, targetRadius, 0.16);
 }
 
-function updateTrail() {
-  for (let i = 0; i < TRAIL_SAMPLES; i += 1) {
-    const head = i === 0;
-    const leader = head ? pointer : trail[i - 1];
-    const follow = head ? 0.7 : 0.42;
+async function setupControls() {
+  try {
+    const { Pane } = await import("https://cdn.jsdelivr.net/npm/tweakpane@4.0.5/dist/tweakpane.min.js");
+    const pane = new Pane({ title: "FX" });
 
-    trail[i].x = mix(trail[i].x, leader.x, follow);
-    trail[i].y = mix(trail[i].y, leader.y, follow);
-    trail[i].radius = mix(
-      trail[i].radius,
-      Math.max(0.02, pointer.radius * (1.0 - i * 0.06)),
-      0.34,
-    );
+    const f1 = pane.addFolder({ title: "Post FX" });
+    f1.addBinding(SETTINGS, "displacementGain", { min: 0, max: 2.5, step: 0.01 });
+    f1.addBinding(SETTINGS, "chromaGain", { min: 0, max: 2.5, step: 0.01 });
+    f1.addBinding(SETTINGS, "blurGain", { min: 0, max: 2.0, step: 0.01 });
+    f1.addBinding(SETTINGS, "pixelateGain", { min: 0, max: 2.0, step: 0.01 });
 
-    const decay = Math.exp(-i * 0.36);
-    const tipBoost = i === 0 ? 1.22 : 1.0;
-    const targetWeight = pointer.strength * decay * tipBoost;
-    const easing = pointer.inside ? (head ? 0.38 : 0.25) : 0.08;
-    trail[i].weight = mix(trail[i].weight, targetWeight, easing);
+    const f2 = pane.addFolder({ title: "Trail" });
+    f2.addBinding(SETTINGS, "trailDecay", { min: 0.01, max: 0.45, step: 0.005 });
+    f2.addBinding(SETTINGS, "trailOpacity", { min: 0.01, max: 0.6, step: 0.005 });
+    f2.addBinding(SETTINGS, "trailRadius", { min: 0.03, max: 0.3, step: 0.005 });
+    f2.addBinding(SETTINGS, "trailStretch", { min: 0.0, max: 1.2, step: 0.01 });
+    f2.addBinding(SETTINGS, "trailTextureMix", { min: 0.0, max: 1.5, step: 0.01 });
+  } catch (error) {
+    console.warn("Tweakpane not loaded", error);
   }
 }
