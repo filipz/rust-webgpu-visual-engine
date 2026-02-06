@@ -38,6 +38,9 @@ const SETTINGS = {
   tipBoost: 2.2,
   trailTextureMix: 0.6,
   trailGhost: 0.52,
+  showDebugTrail: true,
+  debugContrast: 2.4,
+  debugBrightness: 1.1,
   lensRadius: 0.18,
   lensEdgeSoftness: 0.05,
   lensDisplacement: 1.5,
@@ -164,6 +167,10 @@ const sourceLayer = document.querySelector("#source-layer");
 const hudPass = document.querySelector("#hud-pass");
 const hudWebgpu = document.querySelector("#hud-webgpu");
 const passLabel = document.querySelector(".pass-label");
+const debugPanel = document.querySelector("#debug-panel");
+const debugCanvas = document.querySelector("#trail-debug-canvas");
+const debugStats = document.querySelector("#trail-debug-stats");
+const debugCtx = debugCanvas.getContext("2d");
 
 const sourceCanvas = document.createElement("canvas");
 const sourceCtx = sourceCanvas.getContext("2d");
@@ -333,6 +340,7 @@ function frame(nowMs) {
 
   drawSourceLayerToCanvas(sourceCtx, sourceCanvas, sourceLayer);
   updateTrailField();
+  drawTrailDebug();
 
   queue.copyExternalImageToTexture(
     { source: sourceCanvas },
@@ -514,6 +522,51 @@ function updateTrailField() {
     if (trailHistory[i].life < 0.04) {
       trailHistory.splice(i, 1);
     }
+  }
+}
+
+function drawTrailDebug() {
+  if (!debugCtx || !debugPanel) {
+    return;
+  }
+
+  debugPanel.style.display = SETTINGS.showDebugTrail ? "block" : "none";
+  if (!SETTINGS.showDebugTrail) {
+    return;
+  }
+
+  const w = debugCanvas.width;
+  const h = debugCanvas.height;
+
+  debugCtx.setTransform(1, 0, 0, 1, 0, 0);
+  debugCtx.clearRect(0, 0, w, h);
+  debugCtx.imageSmoothingEnabled = false;
+  debugCtx.filter = `contrast(${Math.max(1, SETTINGS.debugContrast)}) brightness(${Math.max(
+    0.2,
+    SETTINGS.debugBrightness,
+  )})`;
+  debugCtx.drawImage(trailCanvas, 0, 0, w, h);
+  debugCtx.filter = "none";
+
+  const px = pointer.x * w;
+  const py = pointer.y * h;
+  const rr = Math.max(2, pointer.radius * w * 0.4);
+  debugCtx.strokeStyle = "rgba(255,0,0,0.9)";
+  debugCtx.lineWidth = 1;
+  debugCtx.beginPath();
+  debugCtx.arc(px, py, rr, 0, Math.PI * 2);
+  debugCtx.stroke();
+  debugCtx.beginPath();
+  debugCtx.moveTo(px - 4, py);
+  debugCtx.lineTo(px + 4, py);
+  debugCtx.moveTo(px, py - 4);
+  debugCtx.lineTo(px, py + 4);
+  debugCtx.stroke();
+
+  if (debugStats) {
+    debugStats.textContent =
+      `trail=${pointer.strength.toFixed(2)} vel=${pointer.velocity.toFixed(2)} ` +
+      `hist=${trailHistory.length}`;
   }
 }
 
@@ -802,6 +855,11 @@ async function setupControls() {
     f2.addBinding(SETTINGS, "tipBoost", { min: 0.2, max: 3.0, step: 0.05 });
     f2.addBinding(SETTINGS, "trailGhost", { min: 0.0, max: 1.0, step: 0.01 });
     f2.addBinding(SETTINGS, "trailTextureMix", { min: 0.0, max: 1.5, step: 0.01 });
+
+    const f3 = pane.addFolder({ title: "Debug" });
+    f3.addBinding(SETTINGS, "showDebugTrail");
+    f3.addBinding(SETTINGS, "debugContrast", { min: 1.0, max: 6.0, step: 0.1 });
+    f3.addBinding(SETTINGS, "debugBrightness", { min: 0.2, max: 2.5, step: 0.05 });
   } catch (error) {
     console.warn("Tweakpane not loaded", error);
   }
