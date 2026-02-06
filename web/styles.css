@@ -1,0 +1,148 @@
+:root {
+  color-scheme: light;
+  --bg-a: #f4f4f2;
+  --bg-b: #d9dad7;
+  --ink: #101010;
+  --muted: #383838;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  min-height: 100%;
+  background: linear-gradient(180deg, var(--bg-a) 0%, var(--bg-b) 100%);
+  color: var(--ink);
+}
+
+.page {
+  position: relative;
+  width: 100%;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+#fx-canvas {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  display: block;
+}
+
+.source-layer {
+  position: relative;
+  z-index: 2;
+  width: min(1200px, 92vw);
+  margin: 3rem auto 0 auto;
+  padding-bottom: 4rem;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2.5rem;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.panel {
+  position: relative;
+  min-height: 70vh;
+}
+
+.panel-left {
+  padding-top: 2rem;
+}
+
+.panel-right {
+  padding-top: 4rem;
+}
+
+.title {
+  margin: 0;
+  font-size: clamp(56px, 11vw, 140px);
+  line-height: 0.9;
+  font-weight: 600;
+}
+
+.body {
+  margin-top: 2.5rem;
+  max-width: 42ch;
+  font-size: clamp(20px, 2.3vw, 36px);
+  line-height: 1.14;
+  letter-spacing: -0.01em;
+  color: #111;
+}
+
+.pass-label {
+  margin: 2.2rem 0 0 0;
+  font-size: clamp(48px, 8vw, 108px);
+  line-height: 0.95;
+  font-weight: 500;
+}
+
+.meta {
+  margin: 1.2rem 0 0 0;
+  font-size: clamp(16px, 2vw, 25px);
+  line-height: 1.2;
+  color: var(--muted);
+}
+
+.gradient-card {
+  width: min(460px, 100%);
+  aspect-ratio: 5 / 4;
+  border-radius: 8px;
+  background:
+    linear-gradient(120deg, rgba(10, 10, 10, 0.3), rgba(10, 10, 10, 0.05) 40%),
+    linear-gradient(60deg, #2018ff, #2bc8ff, #e943c9, #ffe361, #ee2f2f);
+  transform: perspective(600px) rotateY(-12deg) rotateX(3deg);
+  filter: saturate(1.15);
+}
+
+.sans {
+  font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+.serif {
+  font-family: "Times New Roman", Times, serif;
+}
+
+.hud {
+  position: fixed;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: 4;
+  padding: 0.65rem 0.85rem;
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+  font: 500 12px/1.2 "Helvetica Neue", Helvetica, Arial, sans-serif;
+}
+
+.hud-line {
+  margin: 0.18rem 0;
+}
+
+.hud-line span {
+  opacity: 0.65;
+}
+
+@media (max-width: 900px) {
+  .source-layer {
+    width: min(700px, 94vw);
+    grid-template-columns: 1fr;
+    gap: 1.3rem;
+    margin-top: 1.5rem;
+  }
+
+  .panel {
+    min-height: auto;
+  }
+
+  .panel-right {
+    padding-top: 0;
+  }
+}

@@ -30,6 +30,23 @@ Detailed milestones and model-switch guidance are in `ROADMAP.md`.
 cargo test
 ```
 
+## Run Web Demo (DOM -> WebGPU FX)
+
+```bash
+cd web
+python3 -m http.server 4173
+```
+
+Open:
+
+```text
+http://localhost:4173
+```
+
+Demo behavior:
+- Mirrors DOM text/surfaces into an offscreen texture.
+- Applies pass-style post FX (`Mtsdf pass 01/02/03` + `Recovery`) with displacement/chromatic/blur/pixelate.
+
 ## Run Simulation Smoke Test
 
 ```bash

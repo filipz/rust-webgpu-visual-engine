@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WebGPU DOM FX Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <canvas id="fx-canvas" aria-label="WebGPU post-processing output"></canvas>
+
+      <section class="source-layer" id="source-layer" aria-hidden="true">
+        <div class="panel panel-left">
+          <h1 class="fx-source title sans" data-track="0.0">Powell—Studio</h1>
+          <p class="fx-source body serif">
+            Powell—Studio is the creative practice of Brijan Powell, specializing in multiple
+            design disciplines for clients around the globe. In collaboration with our clients, we
+            shape brands that communicate with precision and presence.
+          </p>
+        </div>
+
+        <div class="panel panel-right">
+          <div class="fx-surface gradient-card"></div>
+          <h2 class="fx-source pass-label sans">Mtsdf pass 01</h2>
+          <p class="fx-source meta sans" data-track="0.02">
+            DOM metrics mirrored to WebGPU texture.
+          </p>
+        </div>
+      </section>
+
+      <section class="hud">
+        <p class="hud-line"><span>Pass:</span> <strong id="hud-pass">Mtsdf pass 01</strong></p>
+        <p class="hud-line"><span>Mode:</span> <strong>DOM -> Texture -> PostFX</strong></p>
+      </section>
+    </div>
+
+    <script type="module" src="./main.js"></script>
+  </body>
+</html>
