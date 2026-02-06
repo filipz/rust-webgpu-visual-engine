@@ -155,7 +155,6 @@ impl ParticleGpuSim {
             module: &shader,
             entry_point: "main",
             compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
         });
 
         Ok(Self {

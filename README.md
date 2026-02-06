@@ -43,7 +43,15 @@ cargo run -- --seconds 3 --fps 60
 cargo run -- --seconds 12 --fps 144
 ```
 
-## Run GPU Compute Smoke Test (Step 1)
+## Run Video-Style Pass Flow (aligned with your reference direction)
+
+```bash
+cargo run --example mtsdf_video_flow
+```
+
+This runs the `Mtsdf pass 01/02/03 + Recovery` timeline and drives particle behavior per pass.
+
+## Run GPU Compute Smoke Test (low-level sanity check)
 
 ```bash
 cargo run --example gpu_smoke
